@@ -1,5 +1,7 @@
 package ru.quipy.apigateway
 
+import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.MeterRegistry
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -9,7 +11,7 @@ import ru.quipy.payments.logic.OrderPayer
 import java.util.*
 
 @RestController
-class APIController {
+class APIController(prometheusRegistry: MeterRegistry) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
@@ -18,6 +20,10 @@ class APIController {
 
     @Autowired
     private lateinit var orderPayer: OrderPayer
+
+    private val reqTotal = Counter.builder("http_requests_count")
+        .description("http_requests_count")
+        .register(prometheusRegistry)
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -37,6 +43,9 @@ class APIController {
             OrderStatus.COLLECTING,
             price,
         )
+
+        reqTotal.increment()
+
         return orderRepository.save(order)
     }
 
@@ -64,6 +73,9 @@ class APIController {
 
 
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+
+        reqTotal.increment()
+
         return PaymentSubmissionDto(createdAt, paymentId)
     }
 
