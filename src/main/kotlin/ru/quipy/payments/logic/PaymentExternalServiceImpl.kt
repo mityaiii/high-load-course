@@ -39,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder().build()
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
-    private val ongoingWindow = OngoingWindow(parallelRequests)
+    private val ongoingWindow = OngoingWindow(parallelRequests, fair=true)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -52,12 +52,28 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        rateLimiter.tickBlocking()
+        if (paymentEndTime() > deadline) {
+            paymentESService.update(paymentId) {
+                it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+            }
+
+            return
+        }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
             ongoingWindow.acquire()
+            rateLimiter.tickBlocking()
+
+            if (paymentEndTime() > deadline) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+                }
+
+                ongoingWindow.release()
+                return
+            }
 
             val request = Request.Builder().run {
                 url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
@@ -108,6 +124,7 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
+    private fun paymentEndTime() = now() + requestAverageProcessingTime.toMillis()
 }
 
 public fun now() = System.currentTimeMillis()
