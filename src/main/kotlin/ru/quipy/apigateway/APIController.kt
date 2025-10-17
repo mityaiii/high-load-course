@@ -13,6 +13,7 @@ import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.RejectedExecutionException
 
 @RestController
 class APIController(prometheusRegistry: MeterRegistry) {
@@ -29,7 +30,7 @@ class APIController(prometheusRegistry: MeterRegistry) {
         .description("http_requests_count")
         .register(prometheusRegistry)
 
-    private val rateLimiter = SlidingWindowRateLimiter(11, Duration.ofSeconds(1))
+    private val averageProcessingTime = 1000
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -77,14 +78,17 @@ class APIController(prometheusRegistry: MeterRegistry) {
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-        if (!rateLimiter.tick()) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
+        try {
+            val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+
+            reqTotal.increment()
+
+            return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
+        } catch (ex: RejectedExecutionException) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", averageProcessingTime.toString())
+                .build()
         }
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-
-        reqTotal.increment()
-
-        return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
     }
 
     class PaymentSubmissionDto(
