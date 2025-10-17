@@ -37,7 +37,7 @@ class OrderPayer {
         ThreadPoolExecutor.AbortPolicy()
     )
 
-    private val averageProcessingTime = 1000;
+    private val averageProcessingTime = 1100;
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
