@@ -37,12 +37,13 @@ class OrderPayer {
         ThreadPoolExecutor.AbortPolicy()
     )
 
-    private val averageProcessingTime = 1000;
+    private val averageProcessingTime = 1100
+    private val realRps = 11
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
 
-        if (deadline < paymentExecutor.queue.size * averageProcessingTime + createdAt) {
+        if (deadline < paymentExecutor.queue.size * averageProcessingTime / realRps + createdAt) {
             throw RejectedExecutionException()
         }
         paymentExecutor.submit {
