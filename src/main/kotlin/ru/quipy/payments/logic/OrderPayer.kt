@@ -10,6 +10,7 @@ import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -31,13 +32,19 @@ class OrderPayer {
         16,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(330),
+        LinkedBlockingQueue(319),
         NamedThreadFactory("payment-submission-executor"),
-        ThreadPoolExecutor.DiscardOldestPolicy()
+        ThreadPoolExecutor.AbortPolicy()
     )
+
+    private val averageProcessingTime = 1000;
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
+
+        if (deadline < paymentExecutor.queue.size * averageProcessingTime + createdAt) {
+            throw RejectedExecutionException()
+        }
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
