@@ -42,7 +42,7 @@ class OrderPayer {
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
 
-        if (deadline < paymentExecutor.queue.size * averageProcessingTime + createdAt) {
+        if (deadline < paymentExecutor.queue.size * averageProcessingTime / 11 + 1000 + createdAt) {
             throw RejectedExecutionException()
         }
         paymentExecutor.submit {
