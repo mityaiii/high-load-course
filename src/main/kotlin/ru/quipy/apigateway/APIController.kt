@@ -30,7 +30,9 @@ class APIController(prometheusRegistry: MeterRegistry) {
         .description("http_requests_count")
         .register(prometheusRegistry)
 
-    private val averageProcessingTime = 1000
+    private val slidingWindowRateLimiter = SlidingWindowRateLimiter(11, Duration.ofSeconds(1))
+
+    private val averageProcessingTime = 1050
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -79,6 +81,10 @@ class APIController(prometheusRegistry: MeterRegistry) {
         } ?: throw IllegalArgumentException("No such order $orderId")
 
         try {
+            if (!slidingWindowRateLimiter.tick())
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .build()
+
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
 
             reqTotal.increment()
@@ -86,7 +92,6 @@ class APIController(prometheusRegistry: MeterRegistry) {
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         } catch (ex: RejectedExecutionException) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", averageProcessingTime.toString())
                 .build()
         }
     }
