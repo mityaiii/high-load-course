@@ -9,14 +9,11 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import ru.quipy.common.utils.LeakingBucketRateLimiter
-import ru.quipy.common.utils.SlidingWindowRateLimiter
-import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.TimeUnit
 
 @RestController
 class APIController(prometheusRegistry: MeterRegistry) {
@@ -33,10 +30,13 @@ class APIController(prometheusRegistry: MeterRegistry) {
         .description("http_requests_count")
         .register(prometheusRegistry)
 
+    private val processingTimeMillis = 13000
+    private val rateLimitPerSec = 11
+
     private val leakingBucketRateLimiter = LeakingBucketRateLimiter(
-        11,
+        rateLimitPerSec.toLong(),
         Duration.ofSeconds(1),
-        130
+        rateLimitPerSec * (processingTimeMillis / 1000 - 1)
     )
 
     @PostMapping("/users")
