@@ -33,7 +33,7 @@ class APIController(prometheusRegistry: MeterRegistry) {
     private val leakingBucketRateLimiter = LeakingBucketRateLimiter(
         11,
         Duration.ofSeconds(1),
-        270
+        275
     )
 
     @PostMapping("/users")
