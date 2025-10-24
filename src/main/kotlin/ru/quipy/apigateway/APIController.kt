@@ -31,9 +31,9 @@ class APIController(prometheusRegistry: MeterRegistry) {
         .register(prometheusRegistry)
 
     private val leakingBucketRateLimiter = LeakingBucketRateLimiter(
-        11,
+        9,
         Duration.ofSeconds(1),
-        275
+        230
     )
 
     @PostMapping("/users")
@@ -84,7 +84,9 @@ class APIController(prometheusRegistry: MeterRegistry) {
 
         try {
             if (!leakingBucketRateLimiter.tick())
-                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", "1000")
+                    .build()
 
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
 
