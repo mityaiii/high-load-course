@@ -52,8 +52,6 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        rateLimiter.tickBlocking()
-
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
@@ -64,22 +62,7 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
-            client.newCall(request).execute().use { response ->
-                val body = try {
-                    mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
-                }
-
-                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                }
-            }
+            sendRequest(request, transactionId, paymentId, retryCount = 3, pause = 750)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -108,6 +91,38 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
+    private fun sendRequest(
+        request: Request,
+        transactionId: UUID,
+        paymentId: UUID,
+        retryCount: Int = 1,
+        pause: Long = 1000
+    ) {
+        var x = 0
+        while (x < retryCount) {
+            x++
+            rateLimiter.tickBlocking()
+            client.newCall(request).execute().use { response ->
+                val body = try {
+                    mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+                } catch (e: Exception) {
+                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                }
+
+                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                paymentESService.update(paymentId) {
+                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                }
+                if (body.result || (x == retryCount))
+                    break
+                else
+                    Thread.sleep(pause)
+            }
+        }
+    }
 }
 
 public fun now() = System.currentTimeMillis()
