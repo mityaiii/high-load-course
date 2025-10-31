@@ -36,7 +36,7 @@ class APIController(prometheusRegistry: MeterRegistry) {
     private val leakingBucketRateLimiter = LeakingBucketRateLimiter(
         rateLimitPerSec.toLong(),
         Duration.ofSeconds(1),
-        420
+        409
     )
 
     @PostMapping("/users")
@@ -99,7 +99,10 @@ class APIController(prometheusRegistry: MeterRegistry) {
 
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         } catch (ex: RejectedExecutionException) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
+            val time = System.currentTimeMillis() + 900
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", time.toString())
+                .build()
         }
     }
 
