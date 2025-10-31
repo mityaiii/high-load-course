@@ -8,7 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
-import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.time.Duration
@@ -30,7 +30,14 @@ class APIController(prometheusRegistry: MeterRegistry) {
         .description("http_requests_count")
         .register(prometheusRegistry)
 
-    private val averageProcessingTime = 1000
+    private val processingTimeMillis = 13000
+    private val rateLimitPerSec = 11
+
+    private val leakingBucketRateLimiter = LeakingBucketRateLimiter(
+        rateLimitPerSec.toLong(),
+        Duration.ofSeconds(1),
+        330
+    )
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -79,15 +86,16 @@ class APIController(prometheusRegistry: MeterRegistry) {
         } ?: throw IllegalArgumentException("No such order $orderId")
 
         try {
+            if (!leakingBucketRateLimiter.tick())
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
+
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
 
             reqTotal.increment()
 
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         } catch (ex: RejectedExecutionException) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", averageProcessingTime.toString())
-                .build()
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
         }
     }
 
