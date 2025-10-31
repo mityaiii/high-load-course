@@ -62,7 +62,7 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
-            sendRequest(request, transactionId, paymentId, retryCount = 3, pause = 750)
+            sendRequest(request, transactionId, paymentId, retryCount = 7, deadline = deadline)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -96,30 +96,55 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         paymentId: UUID,
         retryCount: Int = 1,
-        pause: Long = 1000
+        deadline: Long = 1
     ) {
         var x = 0
-        while (x < retryCount) {
+        var shouldTry = true
+        while (shouldTry) {
+            shouldTry = false
             x++
             rateLimiter.tickBlocking()
-            client.newCall(request).execute().use { response ->
-                val body = try {
-                    mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                }
+            try {
+                ongoingWindow.acquire()
 
-                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                client.newCall(request).execute().use { response ->
+                    val body = try {
+                        mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+                    } catch (e: Exception) {
+                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                    }
+
+                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                    }
+                    if (!body.result && body.message == "Temporary error" && deadline - now() > requestAverageProcessingTime.toMillis() && x < retryCount)
+                        shouldTry = true
                 }
-                if (body.result || (x == retryCount))
-                    break
-                else
-                    Thread.sleep(pause)
+            } catch (e: Exception) {
+                when (e) {
+                    is SocketTimeoutException -> {
+                        logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+                        }
+                        break
+                    }
+
+                    else -> {
+                        logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
+
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(false, now(), transactionId, reason = e.message)
+                        }
+                        break
+                    }
+                }
+            } finally {
+                ongoingWindow.release()
             }
         }
     }
