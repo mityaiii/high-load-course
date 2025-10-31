@@ -30,7 +30,7 @@ class OrderPayer {
         16,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(330),
+        LinkedBlockingQueue(8000),
         NamedThreadFactory("payment-submission-executor"),
         ThreadPoolExecutor.AbortPolicy()
     )
