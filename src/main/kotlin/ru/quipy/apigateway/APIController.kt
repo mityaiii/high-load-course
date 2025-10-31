@@ -36,7 +36,7 @@ class APIController(prometheusRegistry: MeterRegistry) {
     private val leakingBucketRateLimiter = LeakingBucketRateLimiter(
         rateLimitPerSec.toLong(),
         Duration.ofSeconds(1),
-        rateLimitPerSec * (processingTimeMillis / 1000 - 1)
+        420
     )
 
     @PostMapping("/users")
@@ -86,8 +86,12 @@ class APIController(prometheusRegistry: MeterRegistry) {
         } ?: throw IllegalArgumentException("No such order $orderId")
 
         try {
-            if (!leakingBucketRateLimiter.tick())
-                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
+            if (!leakingBucketRateLimiter.tick()) {
+                val time = System.currentTimeMillis() + 900
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", time.toString())
+                    .build()
+            }
 
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
 
