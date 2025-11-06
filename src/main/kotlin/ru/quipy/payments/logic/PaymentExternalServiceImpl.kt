@@ -107,7 +107,7 @@ class PaymentExternalSystemAdapterImpl(
             x++
             rateLimiter.tickBlocking()
 
-            val adjustedTimeout = computeQuantile(0.95)
+            val adjustedTimeout = computeQuantile(0.85)
                 .coerceIn(requestAverageProcessingTime.toMillis(), deadline - now())
 
             val client = client
