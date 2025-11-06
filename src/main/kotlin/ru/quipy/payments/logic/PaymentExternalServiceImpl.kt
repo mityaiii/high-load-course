@@ -74,7 +74,7 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
-            sendRequest(client, request, transactionId, paymentId, retryCount = 7, deadline = deadline)
+            sendRequest(client, request, transactionId, paymentId, retryCount = 10, deadline = deadline)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -169,7 +169,7 @@ class PaymentExternalSystemAdapterImpl(
             responseTimes.pollFirst()
         }
 
-        responseTimes.offerLast(durationMs)
+        responseTimes.offer(durationMs)
     }
 
     private fun computeQuantile(quantile: Double): Long {
