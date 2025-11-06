@@ -63,7 +63,8 @@ class PaymentExternalSystemAdapterImpl(
 
         val client = client
             .newBuilder()
-            .callTimeout(adjustedTimeout, TimeUnit.MILLISECONDS)
+            .callTimeout(Duration.ofMillis(adjustedTimeout))
+            .readTimeout(Duration.ofMillis(adjustedTimeout))
             .build()
 
         try {
