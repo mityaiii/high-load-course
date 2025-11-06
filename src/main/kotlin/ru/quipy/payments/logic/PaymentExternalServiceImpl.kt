@@ -61,7 +61,8 @@ class PaymentExternalSystemAdapterImpl(
             .coerceAtLeast(requestAverageProcessingTime.toMillis())
             .coerceAtMost(deadline - now())
 
-        val client = client.newBuilder()
+        val client = client
+            .newBuilder()
             .callTimeout(adjustedTimeout, TimeUnit.MILLISECONDS)
             .build()
 
@@ -168,7 +169,7 @@ class PaymentExternalSystemAdapterImpl(
             responseTimes.pollFirst()
         }
 
-        responseTimes.offer(durationMs)
+        responseTimes.offerLast(durationMs)
     }
 
     private fun computeQuantile(quantile: Double): Long {
@@ -179,6 +180,8 @@ class PaymentExternalSystemAdapterImpl(
 
         Arrays.sort(current)
         val idx = ((current.size - 1) * quantile).toInt()
+            .coerceAtLeast(0)
+            .coerceAtMost(current.size - 1)
         return current[idx].toLong()
     }
 }
