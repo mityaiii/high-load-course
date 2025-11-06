@@ -14,7 +14,6 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.LinkedBlockingDeque
-import java.util.concurrent.TimeUnit
 
 
 // Advice: always treat time as a Duration
@@ -173,16 +172,15 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private fun computeQuantile(quantile: Double): Long {
-        val current = responseTimes.toTypedArray()
+        val current = responseTimes.toList()
         if (current.isEmpty()) {
             return (requestAverageProcessingTime.toMillis() * quantile).toLong()
         }
 
-        Arrays.sort(current)
         val idx = ((current.size - 1) * quantile).toInt()
             .coerceAtLeast(0)
             .coerceAtMost(current.size - 1)
-        return current[idx].toLong()
+        return current.sorted()[idx].toLong()
     }
 }
 
