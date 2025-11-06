@@ -13,6 +13,8 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.TimeUnit
 
 
 // Advice: always treat time as a Duration
@@ -36,10 +38,11 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec.toLong()
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient()
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
+    private val responseTimes = LinkedBlockingDeque<Long>(1024)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -54,6 +57,14 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
+        val adjustedTimeout = computeQuantile(0.95)
+            .coerceAtLeast(requestAverageProcessingTime.toMillis())
+            .coerceAtMost(deadline - now())
+
+        val client = client.newBuilder()
+            .callTimeout(adjustedTimeout, TimeUnit.MILLISECONDS)
+            .build()
+
         try {
             ongoingWindow.acquire()
 
@@ -62,7 +73,7 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
-            sendRequest(request, transactionId, paymentId, retryCount = 7, deadline = deadline)
+            sendRequest(client, request, transactionId, paymentId, retryCount = 7, deadline = deadline)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -92,6 +103,7 @@ class PaymentExternalSystemAdapterImpl(
     override fun name() = properties.accountName
 
     private fun sendRequest(
+        client: OkHttpClient,
         request: Request,
         transactionId: UUID,
         paymentId: UUID,
@@ -108,6 +120,8 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.acquire()
 
                 client.newCall(request).execute().use { response ->
+                    addResponseTime(response.receivedResponseAtMillis - response.sentRequestAtMillis)
+
                     val body = try {
                         mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
                     } catch (e: Exception) {
@@ -147,6 +161,25 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.release()
             }
         }
+    }
+
+    private fun addResponseTime(durationMs: Long) {
+        if (responseTimes.remainingCapacity() == 0) {
+            responseTimes.pollFirst()
+        }
+
+        responseTimes.offer(durationMs)
+    }
+
+    private fun computeQuantile(quantile: Double): Long {
+        val current = responseTimes.toTypedArray()
+        if (current.isEmpty()) {
+            return (requestAverageProcessingTime.toMillis() * quantile).toLong()
+        }
+
+        Arrays.sort(current)
+        val idx = ((current.size - 1) * quantile).toInt()
+        return current[idx].toLong()
     }
 }
 
