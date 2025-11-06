@@ -57,16 +57,6 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        val adjustedTimeout = computeQuantile(0.95)
-            .coerceAtLeast(requestAverageProcessingTime.toMillis())
-            .coerceAtMost(deadline - now())
-
-        val client = client
-            .newBuilder()
-            .callTimeout(Duration.ofMillis(adjustedTimeout))
-            .readTimeout(Duration.ofMillis(adjustedTimeout))
-            .build()
-
         try {
             ongoingWindow.acquire()
 
@@ -75,7 +65,7 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
-            sendRequest(client, request, transactionId, paymentId, retryCount = 10, deadline = deadline)
+            sendRequest(request, transactionId, paymentId, retryCount = 10, deadline = deadline)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -105,7 +95,6 @@ class PaymentExternalSystemAdapterImpl(
     override fun name() = properties.accountName
 
     private fun sendRequest(
-        client: OkHttpClient,
         request: Request,
         transactionId: UUID,
         paymentId: UUID,
@@ -118,6 +107,16 @@ class PaymentExternalSystemAdapterImpl(
             shouldTry = false
             x++
             rateLimiter.tickBlocking()
+
+            val adjustedTimeout = computeQuantile(0.95)
+                .coerceIn(requestAverageProcessingTime.toMillis(), deadline - now())
+
+            val client = client
+                .newBuilder()
+                .callTimeout(Duration.ofMillis(adjustedTimeout))
+                .readTimeout(Duration.ofMillis(adjustedTimeout))
+                .build()
+
             try {
                 ongoingWindow.acquire()
 
