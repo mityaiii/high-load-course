@@ -2,6 +2,10 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.DistributionSummary
+import io.micrometer.core.instrument.MeterRegistry
+import io.prometheus.metrics.core.metrics.Summary
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -10,9 +14,12 @@ import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.TimeUnit
 
 
 // Advice: always treat time as a Duration
@@ -21,6 +28,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
+    private val meterRegistry: MeterRegistry
 ) : PaymentExternalSystemAdapter {
 
     companion object {
@@ -36,7 +44,21 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec.toLong()
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient()
+
+    private val responseTimes = LinkedBlockingDeque<Long>(1024)
+
+
+    var requestDuration = DistributionSummary.builder("avg_payment_processing_time")
+        .description("request_latency")
+        .publishPercentiles(0.5, 0.75, 0.9, 0.95, 0.99)
+        .publishPercentileHistogram()
+        .register(meterRegistry)
+
+
+    private val retryCounter = Counter.builder("retry_count")
+        .description("retry_count")
+        .register(meterRegistry)
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
@@ -55,14 +77,12 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
-            ongoingWindow.acquire()
-
             val request = Request.Builder().run {
                 url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
                 post(emptyBody)
             }.build()
 
-            sendRequest(request, transactionId, paymentId, retryCount = 7, deadline = deadline)
+            sendRequest(request, transactionId, paymentId, retryCount = 3, deadline = deadline)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -80,8 +100,6 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 }
             }
-        } finally {
-            ongoingWindow.release()
         }
     }
 
@@ -107,7 +125,17 @@ class PaymentExternalSystemAdapterImpl(
             try {
                 ongoingWindow.acquire()
 
+                val adjustedTimeout = computeQuantile(0.95)
+                    .coerceIn(requestAverageProcessingTime.toMillis(), deadline - now())
+
+                val client = client.newBuilder()
+                    .callTimeout(adjustedTimeout, TimeUnit.MILLISECONDS)
+                    .build()
+
+                var start = now()
                 client.newCall(request).execute().use { response ->
+                    addResponseTime(response.receivedResponseAtMillis - response.sentRequestAtMillis)
+                    requestDuration.record((now() - start).toDouble())
                     val body = try {
                         mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
                     } catch (e: Exception) {
@@ -134,6 +162,21 @@ class PaymentExternalSystemAdapterImpl(
                         break
                     }
 
+                    is InterruptedIOException -> {
+                        if (x < retryCount && deadline - now() > requestAverageProcessingTime.toMillis()) {
+                            shouldTry = true
+                            retryCounter.increment()
+                            ongoingWindow.release()
+                            continue
+                        }
+                        logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
+
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(false, now(), transactionId, reason = e.message)
+                        }
+                        break
+                    }
+
                     else -> {
                         logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
 
@@ -147,6 +190,26 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.release()
             }
         }
+    }
+
+    private fun addResponseTime(durationMs: Long) {
+        if (responseTimes.remainingCapacity() == 0) {
+            responseTimes.pollFirst()
+        }
+
+        responseTimes.offer(durationMs)
+    }
+
+
+    private fun computeQuantile(quantile: Double): Long {
+        val current = responseTimes.toTypedArray()
+        if (current.isEmpty()) {
+            return (requestAverageProcessingTime.toMillis() * quantile).toLong()
+        }
+
+        Arrays.sort(current)
+        val idx = ((current.size - 1) * quantile).toInt()
+        return current[idx].toLong()
     }
 }
 
