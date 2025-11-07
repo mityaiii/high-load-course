@@ -125,7 +125,7 @@ class PaymentExternalSystemAdapterImpl(
             try {
                 ongoingWindow.acquire()
 
-                val adjustedTimeout = computeQuantile(0.85)
+                val adjustedTimeout = computeQuantile(0.95)
                     .coerceIn(requestAverageProcessingTime.toMillis(), deadline - now())
 
                 val client = client.newBuilder()
