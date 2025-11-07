@@ -18,6 +18,7 @@ import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
 
@@ -43,9 +44,10 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec.toLong()
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder()
-        .callTimeout(1500, TimeUnit.MILLISECONDS)
-        .build()
+    private val client = OkHttpClient()
+
+    private val responseTimes = LinkedBlockingDeque<Long>(1024)
+
 
     var requestDuration = DistributionSummary.builder("avg_payment_processing_time")
         .description("request_latency")
@@ -123,8 +125,16 @@ class PaymentExternalSystemAdapterImpl(
             try {
                 ongoingWindow.acquire()
 
+                val adjustedTimeout = computeQuantile(0.85)
+                    .coerceIn(requestAverageProcessingTime.toMillis(), deadline - now())
+
+                val client = client.newBuilder()
+                    .callTimeout(adjustedTimeout, TimeUnit.MILLISECONDS)
+                    .build()
+
                 var start = now()
                 client.newCall(request).execute().use { response ->
+                    addResponseTime(response.receivedResponseAtMillis - response.sentRequestAtMillis)
                     requestDuration.record((now() - start).toDouble())
                     val body = try {
                         mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
@@ -180,6 +190,26 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.release()
             }
         }
+    }
+
+    private fun addResponseTime(durationMs: Long) {
+        if (responseTimes.remainingCapacity() == 0) {
+            responseTimes.pollFirst()
+        }
+
+        responseTimes.offer(durationMs)
+    }
+
+
+    private fun computeQuantile(quantile: Double): Long {
+        val current = responseTimes.toTypedArray()
+        if (current.isEmpty()) {
+            return (requestAverageProcessingTime.toMillis() * quantile).toLong()
+        }
+
+        Arrays.sort(current)
+        val idx = ((current.size - 1) * quantile).toInt()
+        return current[idx].toLong()
     }
 }
 
