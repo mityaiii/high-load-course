@@ -43,7 +43,7 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder()
-              .callTimeout(2000, TimeUnit.MILLISECONDS)
+        .callTimeout(1500, TimeUnit.MILLISECONDS)
         .build()
 
     var requestDuration = DistributionSummary.builder("avg_payment_processing_time")
