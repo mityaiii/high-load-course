@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
 import io.prometheus.metrics.core.metrics.Summary
@@ -52,6 +53,10 @@ class PaymentExternalSystemAdapterImpl(
         .publishPercentileHistogram()
         .register(meterRegistry)
 
+
+    private val retryCounter = Counter.builder("retry_count")
+        .description("retry_count")
+        .register(meterRegistry)
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
@@ -150,6 +155,8 @@ class PaymentExternalSystemAdapterImpl(
                     is InterruptedIOException -> {
                         if (x < retryCount && deadline - now() > requestAverageProcessingTime.toMillis()) {
                             shouldTry = true
+                            retryCounter.increment()
+                            ongoingWindow.release()
                             continue
                         }
                         logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
