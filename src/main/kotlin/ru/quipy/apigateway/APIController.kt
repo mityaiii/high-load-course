@@ -71,7 +71,7 @@ class APIController {
         }
         catch(ex: Exception) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", 5.toString())
+                .header("Retry-After", 10.toString())
                 .build()
         }
     }
