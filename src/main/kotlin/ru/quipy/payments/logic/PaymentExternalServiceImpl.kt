@@ -46,7 +46,7 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val httpClient = HttpClient.newBuilder()
-        .executor(Executors.newFixedThreadPool(100))
+        .executor(Executors.newFixedThreadPool(110))
         .version(HttpClient.Version.HTTP_2)
         .build()
 
