@@ -7,7 +7,6 @@ import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.OngoingWindow
@@ -75,8 +74,7 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
-        if (rateLimiter.tick())
-            delay(10)
+        rateLimiter.tickBlocking()
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         paymentESService.update(paymentId) {
