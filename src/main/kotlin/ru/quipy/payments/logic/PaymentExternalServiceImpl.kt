@@ -2,15 +2,11 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -21,7 +17,6 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingDeque
 
 
 // Advice: always treat time as a Duration
@@ -51,24 +46,13 @@ class PaymentExternalSystemAdapterImpl(
         .version(HttpClient.Version.HTTP_2)
         .build()
 
-    private val responseTimes = LinkedBlockingDeque<Long>(1024)
-
-
     var requestDuration = DistributionSummary.builder("avg_payment_processing_time")
         .description("request_latency")
         .publishPercentiles(0.5, 0.75, 0.9, 0.95, 0.99)
         .publishPercentileHistogram()
         .register(meterRegistry)
 
-
-    private val retryCounter = Counter.builder("retry_count")
-        .description("retry_count")
-        .register(meterRegistry)
-
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
-    private val ongoingWindow = OngoingWindow(parallelRequests)
-
-    private val executorScope = CoroutineScope(Dispatchers.IO)
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -141,26 +125,6 @@ class PaymentExternalSystemAdapterImpl(
         }
 
     }
+}
 
-        private fun addResponseTime(durationMs: Long) {
-            if (responseTimes.remainingCapacity() == 0) {
-                responseTimes.pollFirst()
-            }
-
-            responseTimes.offer(durationMs)
-        }
-
-
-        private fun computeQuantile(quantile: Double): Long {
-            val current = responseTimes.toTypedArray()
-            if (current.isEmpty()) {
-                return (requestAverageProcessingTime.toMillis() * quantile).toLong()
-            }
-
-            Arrays.sort(current)
-            val idx = ((current.size - 1) * quantile).toInt()
-            return current[idx].toLong()
-        }
-    }
-
-    public fun now() = System.currentTimeMillis()
+public fun now() = System.currentTimeMillis()
