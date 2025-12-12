@@ -118,10 +118,12 @@ class PaymentExternalSystemAdapterImpl(
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
-                if (!body.result && body.message == "Temporary error" && deadline - now() > requestAverageProcessingTime.toMillis() && x < retryCount)
+                if (!body.result && body.message == "Temporary error" && deadline - now() > requestAverageProcessingTime.toMillis() && x < retryCount) {
                     shouldTry = true
-
+                }
             }
+            if (shouldTry)
+                delay(100 * x.toLong())
         }
 
     }
