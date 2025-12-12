@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.delay
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.NonBlockingOngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -53,6 +54,7 @@ class PaymentExternalSystemAdapterImpl(
         .register(meterRegistry)
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
+    private val ongoingWindow = NonBlockingOngoingWindow(parallelRequests)
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -67,16 +69,6 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-
-        while (!rateLimiter.tick()) {
-            if (now() >= deadline) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
-                }
-                return
-            }
-            delay(10)
-        }
 
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
@@ -101,29 +93,36 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         var x = 0
         var shouldTry = true
-        while (shouldTry) {
-            shouldTry = false
-            x++
-            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
-                val body = try {
-                    mapper.readValue(response.body(), ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                }
+        try {
+            while(ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail)
+                delay(10)
+            rateLimiter.tickBlocking();
+            while (shouldTry) {
+                shouldTry = false
+                x++
+                httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
+                    val body = try {
+                        mapper.readValue(response.body(), ExternalSysResponse::class.java)
+                    } catch (e: Exception) {
+                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                    }
 
-                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                    }
+                    if (!body.result && body.message == "Temporary error" && deadline - now() > requestAverageProcessingTime.toMillis() && x < retryCount) {
+                        shouldTry = true
+                    }
                 }
-                if (!body.result && body.message == "Temporary error" && deadline - now() > requestAverageProcessingTime.toMillis() && x < retryCount) {
-                    shouldTry = true
-                }
+                if (shouldTry)
+                    delay(100 * x.toLong())
             }
-            if (shouldTry)
-                delay(100 * x.toLong())
+        } finally {
+            ongoingWindow.releaseWindow()
         }
 
     }
