@@ -93,13 +93,14 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         var x = 0
         var shouldTry = true
-        try {
-            while(ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail)
+        while (shouldTry) {
+            shouldTry = false
+            x++
+
+            while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail)
                 delay(10)
             rateLimiter.tickBlocking();
-            while (shouldTry) {
-                shouldTry = false
-                x++
+            try {
                 httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
                     val body = try {
                         mapper.readValue(response.body(), ExternalSysResponse::class.java)
@@ -118,13 +119,12 @@ class PaymentExternalSystemAdapterImpl(
                         shouldTry = true
                     }
                 }
-                if (shouldTry)
-                    delay(100 * x.toLong())
+            } finally {
+                ongoingWindow.releaseWindow()
             }
-        } finally {
-            ongoingWindow.releaseWindow()
+            if (shouldTry)
+                delay(100 * x.toLong())
         }
-
     }
 }
 
