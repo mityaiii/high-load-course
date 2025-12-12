@@ -99,7 +99,8 @@ class PaymentExternalSystemAdapterImpl(
 
             while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail)
                 delay(10)
-            rateLimiter.tickBlocking();
+            while (!rateLimiter.tick())
+                delay(10)
             try {
                 httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
                     val body = try {
@@ -123,7 +124,7 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.releaseWindow()
             }
             if (shouldTry)
-                delay(100 * x.toLong())
+                delay(10 * x.toLong())
         }
     }
 }
