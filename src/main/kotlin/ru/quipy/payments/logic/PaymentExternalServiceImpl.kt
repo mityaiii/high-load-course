@@ -104,10 +104,25 @@ class PaymentExternalSystemAdapterImpl(
             shouldTry = false
             x++
 
-            while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail)
+            while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
                 delay(10)
-            while (!rateLimiter.tick())
-                Thread.sleep(10)
+                if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                    }
+                    return
+                }
+            }
+
+            while (!rateLimiter.tick()) {
+                delay(10)
+                if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                    }
+                    return
+                }
+            }
             try {
                 httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
                     val body = try {
