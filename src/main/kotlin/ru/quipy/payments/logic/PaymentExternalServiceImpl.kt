@@ -55,16 +55,8 @@ class PaymentExternalSystemAdapterImpl(
         .publishPercentileHistogram()
         .register(meterRegistry)
 
-    //private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
+    private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = NonBlockingOngoingWindow(parallelRequests)
-
-    private val rateLimiter = RateLimiter.of(
-        "payment-rate-limiter",
-        RateLimiterConfig.custom()
-            .limitForPeriod(rateLimitPerSec.toInt())
-            .limitRefreshPeriod(Duration.ofSeconds(1))
-            .timeoutDuration(Duration.ZERO)
-            .build())
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -118,10 +110,16 @@ class PaymentExternalSystemAdapterImpl(
                 delay(10)
             }
 
-            try {
-                while (!rateLimiter.acquirePermission()) {
-                    delay(10)
+            while (!rateLimiter.tick()) {
+                delay(10)
+            }
+            if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
                 }
+                return
+            }
+            try {
                 httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
                     val body = try {
                         mapper.readValue(response.body(), ExternalSysResponse::class.java)
