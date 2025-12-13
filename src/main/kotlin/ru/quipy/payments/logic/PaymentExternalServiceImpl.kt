@@ -93,7 +93,14 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         var x = 0
         var shouldTry = true
+
         while (shouldTry) {
+            if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                }
+                return
+            }
             shouldTry = false
             x++
 
