@@ -9,6 +9,7 @@ import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.delay
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.ConcurrentRateLimiter
 import ru.quipy.common.utils.NonBlockingOngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -55,7 +56,7 @@ class PaymentExternalSystemAdapterImpl(
         .publishPercentileHistogram()
         .register(meterRegistry)
 
-    private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
+    private val rateLimiter = ConcurrentRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = NonBlockingOngoingWindow(parallelRequests)
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -110,15 +111,13 @@ class PaymentExternalSystemAdapterImpl(
                 delay(10)
             }
 
-            while (!rateLimiter.tick()) {
-                delay(10)
-            }
-            if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
+            if (!rateLimiter.tryTick(deadline)) {
                 paymentESService.update(paymentId) {
                     it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
                 }
                 return
             }
+
             try {
                 httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
                     val body = try {
@@ -134,7 +133,7 @@ class PaymentExternalSystemAdapterImpl(
                     paymentESService.update(paymentId) {
                         it.logProcessing(body.result, now(), transactionId, reason = body.message)
                     }
-                    if (!body.result) {
+                    if (!body.result && x < retryCount) {
                         shouldTry = true
                     }
                 }
