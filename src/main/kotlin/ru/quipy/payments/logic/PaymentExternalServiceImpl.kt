@@ -6,6 +6,7 @@ import io.github.resilience4j.ratelimiter.RateLimiter
 import io.github.resilience4j.ratelimiter.RateLimiterConfig
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
@@ -99,8 +100,10 @@ class PaymentExternalSystemAdapterImpl(
 
         while (shouldTry) {
             if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                with(Dispatchers.IO) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                    }
                 }
                 return
             }
@@ -112,36 +115,38 @@ class PaymentExternalSystemAdapterImpl(
             }
 
             if (!rateLimiter.tryTick(deadline)) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                with(Dispatchers.IO) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
+                    }
                 }
                 return
             }
 
-            try {
-                httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
-                    val body = try {
-                        mapper.readValue(response.body(), ExternalSysResponse::class.java)
-                    } catch (e: Exception) {
-                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
-                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                    }
+            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
+                val body = try {
+                    mapper.readValue(response.body(), ExternalSysResponse::class.java)
+                } catch (e: Exception) {
+                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                } finally {
+                    ongoingWindow.releaseWindow()
+                }
 
-                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                with(Dispatchers.IO) {
                     paymentESService.update(paymentId) {
                         it.logProcessing(body.result, now(), transactionId, reason = body.message)
                     }
-                    if (!body.result && x < retryCount) {
-                        shouldTry = true
-                    }
                 }
-            } finally {
-                ongoingWindow.releaseWindow()
+                if (!body.result && x < retryCount) {
+                    shouldTry = true
+                }
             }
             if (shouldTry)
-                delay(10 * x.toLong())
+                delay(1000 * x.toLong())
         }
     }
 }
