@@ -97,11 +97,7 @@ class PaymentExternalSystemAdapterImpl(
 
         while (shouldTry) {
             if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
-                with(Dispatchers.IO) {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
-                    }
-                }
+                logResult(paymentId, transactionId, "Deadline exceeded")
                 return
             }
             shouldTry = false
@@ -147,12 +143,20 @@ class PaymentExternalSystemAdapterImpl(
                     delay(100 * x.toLong())
             } catch (e: Exception) {
                 logger.error("[$accountName] Payment failed for $paymentId", e)
-                with(Dispatchers.IO) {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason = e.message)
-                    }
+                logResult(paymentId, transactionId, e.message)
+            }
+        }
+    }
+
+    private fun logResult(paymentId: UUID, transactionId: UUID, message: String?) {
+        try {
+            with(Dispatchers.IO) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = message)
                 }
             }
+        } catch(e: Exception) {
+            logger.error("[$accountName] failed to save result for $paymentId", e)
         }
     }
 }
