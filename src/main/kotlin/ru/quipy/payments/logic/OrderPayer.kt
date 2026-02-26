@@ -6,7 +6,9 @@ import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import org.springframework.web.server.ResponseStatusException
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.core.EventSourcingService
@@ -41,20 +43,29 @@ class OrderPayer {
 
     val executorScope = CoroutineScope(paymentExecutor.asCoroutineDispatcher())
 
-    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
-        val createdAt = System.currentTimeMillis()
-        executorScope.launch {
-            val createdEvent = paymentESService.create {
-                it.create(
-                    paymentId,
-                    orderId,
-                    amount
-                )
-            }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
-
-            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+        val (canAccept, estimatedWaitMs) = paymentService.canAcceptPayment(deadline)
+        if (!canAccept) {
+            logger.error("429 from OrderPayer")
+            val delaySeconds = (estimatedWaitMs - System.currentTimeMillis()) / 1000
+            throw ResponseStatusException(
+                HttpStatus.TOO_MANY_REQUESTS,
+                delaySeconds.toString()
+            )
         }
+
+
+        val createdAt = System.currentTimeMillis()
+        val createdEvent = paymentESService.create {
+            it.create(
+                paymentId,
+                orderId,
+                amount
+            )
+        }
+        logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
+
+        paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         return createdAt
     }
 }

@@ -1,16 +1,16 @@
 ### Run test remotely
-# @timeout 120
+
 POST http://77.234.215.138:34321/run
 Content-Type: application/json
 
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "branch": "lab-2",
-  "accounts": "acc-5",
-  "ratePerSecond": 2,
-  "testCount": 100,
-  "processingTimeMillis": 60000,
+  "branch": "lab-9-test",
+  "accounts": "acc-13",
+  "ratePerSecond": 4000,
+  "testCount": 1500000,
+  "processingTimeMillis": 1000,
   "onPremises": true
 }
 

@@ -7,7 +7,8 @@ interface PaymentService {
     /**
      * Submit payment request to some external service.
      */
-    suspend fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
+    fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
+    fun canAcceptPayment(deadline: Long): Pair<Boolean, Long>
 }
 
 /**
@@ -17,13 +18,15 @@ interface PaymentService {
 
  */
 interface PaymentExternalSystemAdapter {
-    suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
+    fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
 
     fun name(): String
 
     fun price(): Int
 
     fun isEnabled(): Boolean
+
+    fun canAcceptPayment(deadline: Long): Pair<Boolean, Long>
 }
 
 /**
