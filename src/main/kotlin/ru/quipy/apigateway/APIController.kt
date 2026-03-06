@@ -67,11 +67,18 @@ class APIController {
 
         try {
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+            if (createdAt == -3L) {
+                val retryTime = System.currentTimeMillis() + 40
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", retryTime.toString())
+                    .build()
+            }
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         }
         catch(ex: Exception) {
+            val retryTime = System.currentTimeMillis() + 40
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", 1.toString())
+                .header("Retry-After", retryTime.toString())
                 .build()
         }
     }
