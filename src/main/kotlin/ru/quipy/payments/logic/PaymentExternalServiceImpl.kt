@@ -94,7 +94,7 @@ class PaymentExternalSystemAdapterImpl(
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-        CoroutineScope(allTasks + SupervisorJob()).launch {
+        CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
 
 
             sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
@@ -135,7 +135,7 @@ class PaymentExternalSystemAdapterImpl(
 //                }
 
                 if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
-                    withContext(dbDispatcher) {
+                    withContext(Dispatchers.IO) {
                         paymentESService.update(paymentId) {
                             it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
                         }
@@ -144,7 +144,7 @@ class PaymentExternalSystemAdapterImpl(
                 }
 
                 logger.info("Sending request")
-                val response = withContext(httpDispatcher) {
+                val response = withContext(Dispatchers.Main) {
                     httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
                 }
                 val body = try {
@@ -162,7 +162,7 @@ class PaymentExternalSystemAdapterImpl(
                 logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
                 // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                withContext(dbDispatcher) {
+                withContext(Dispatchers.IO) {
                     paymentESService.update(paymentId) {
                         it.logProcessing(body.result, now(), transactionId, reason = body.message)
                     }
@@ -211,7 +211,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private suspend fun logResult(paymentId: UUID, transactionId: UUID, message: String?) {
         try {
-            withContext(dbDispatcher) {
+            withContext(Dispatchers.IO) {
                 paymentESService.update(paymentId) {
                     it.logProcessing(false, now(), transactionId, reason = message)
                 }
