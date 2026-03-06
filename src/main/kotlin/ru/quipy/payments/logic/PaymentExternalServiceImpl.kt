@@ -77,7 +77,15 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
+// Вне зависимости от исхода оплаты важно отметить что она была отправлена.
+        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
+       // withContext(dbDispatcher) {
+            paymentESService.update(paymentId) {
+                it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
+            }
+       // }
 
+        logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
 
         val request = HttpRequest.newBuilder()
@@ -88,15 +96,7 @@ class PaymentExternalSystemAdapterImpl(
 
         CoroutineScope(allTasks + SupervisorJob()).launch {
 
-            // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-            // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-            withContext(dbDispatcher) {
-                paymentESService.update(paymentId) {
-                    it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-                }
-            }
 
-            logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
             sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
         }
     }
