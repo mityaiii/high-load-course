@@ -122,13 +122,13 @@ class PaymentExternalSystemAdapterImpl(
             x++
 
             try {
-                while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
-                    delay(1)
-                }
-
-                while (!rateLimiter.tick()) {
-                    delay(1)
-                }
+//                while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
+//                    delay(1)
+//                }
+//
+//                while (!rateLimiter.tick()) {
+//                    delay(1)
+//                }
 
                 if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
                     withContext(dbDispatcher) {
