@@ -66,11 +66,11 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = NonBlockingOngoingWindow(parallelRequests)
 
-    private val httpDispatcher = Executors.newFixedThreadPool(60).asCoroutineDispatcher()
+    private val httpDispatcher = Executors.newFixedThreadPool(50).asCoroutineDispatcher()
 
-    private val dbDispatcher = Executors.newFixedThreadPool(60).asCoroutineDispatcher()
+    private val dbDispatcher = Executors.newFixedThreadPool(50).asCoroutineDispatcher()
 
-    private val allTasks = Executors.newFixedThreadPool(100).asCoroutineDispatcher()
+    private val allTasks = Executors.newFixedThreadPool(130).asCoroutineDispatcher()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
