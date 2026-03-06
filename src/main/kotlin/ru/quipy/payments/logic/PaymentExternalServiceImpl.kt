@@ -70,7 +70,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val dbDispatcher = Executors.newFixedThreadPool(50).asCoroutineDispatcher()
 
-    private val allTasks = Executors.newFixedThreadPool(130).asCoroutineDispatcher()
+    private val allTasks = Executors.newFixedThreadPool(100).asCoroutineDispatcher()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -78,13 +78,7 @@ class PaymentExternalSystemAdapterImpl(
         val transactionId = UUID.randomUUID()
 
 
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-        paymentESService.update(paymentId) {
-            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-        }
 
-        logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
@@ -93,6 +87,16 @@ class PaymentExternalSystemAdapterImpl(
             .build()
 
         CoroutineScope(allTasks + SupervisorJob()).launch {
+
+            // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
+            // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
+            withContext(dbDispatcher) {
+                paymentESService.update(paymentId) {
+                    it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
+                }
+            }
+
+            logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
             sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
         }
     }
