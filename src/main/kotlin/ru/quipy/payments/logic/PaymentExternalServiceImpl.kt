@@ -94,9 +94,7 @@ class PaymentExternalSystemAdapterImpl(
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-        CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
-
-
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
             sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
         }
     }
@@ -144,7 +142,7 @@ class PaymentExternalSystemAdapterImpl(
                 }
 
                 logger.info("Sending request")
-                val response = withContext(Dispatchers.Main) {
+                val response = withContext(Dispatchers.IO) {
                     httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
                 }
                 val body = try {
