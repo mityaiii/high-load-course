@@ -30,11 +30,11 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        200,
-        500,
-        10L,
+        25,
+        25,
+        0L,
         TimeUnit.SECONDS,
-        LinkedBlockingQueue(11_000),
+        LinkedBlockingQueue(10_000),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler()
     )

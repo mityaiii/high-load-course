@@ -17,6 +17,16 @@ class OngoingWindow(
     fun awaitingQueueSize() = window.queueLength
 }
 
+class AsyncOngoingWindow(
+    maxWinSize: Int
+) {
+    private val window = kotlinx.coroutines.sync.Semaphore(maxWinSize)
+
+    suspend fun acquire() = window.acquire()
+
+    fun release() = window.release()
+}
+
 class NonBlockingOngoingWindow(
     private val maxWinSize: Int
 ) {
