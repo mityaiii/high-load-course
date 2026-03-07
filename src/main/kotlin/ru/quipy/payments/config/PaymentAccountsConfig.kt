@@ -56,7 +56,7 @@ class PaymentAccountsConfig {
             .map {
                 PaymentExternalSystemAdapterImpl(
                     it,
-                    paymentService,
+//                    paymentService,
                     paymentProviderHostPort,
                     token,
                     meterRegistry

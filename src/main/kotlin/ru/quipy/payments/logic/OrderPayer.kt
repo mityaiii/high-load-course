@@ -44,14 +44,14 @@ class OrderPayer {
     suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         executorScope.launch {
-            val createdEvent = paymentESService.create {
-                it.create(
-                    paymentId,
-                    orderId,
-                    amount
-                )
-            }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+//            val createdEvent = paymentESService.create {
+//                it.create(
+//                    paymentId,
+//                    orderId,
+//                    amount
+//                )
+//            }
+            logger.trace("Payment $paymentId for order $orderId created.")
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
