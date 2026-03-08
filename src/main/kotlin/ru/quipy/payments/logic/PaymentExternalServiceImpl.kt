@@ -48,7 +48,7 @@ class PaymentExternalSystemAdapterImpl(
         .build()
 
     private val paymentUpdateExecutor: ExecutorService =
-        Executors.newFixedThreadPool(4)
+        Executors.newFixedThreadPool(10)
 
     var requestDuration = DistributionSummary.builder("avg_payment_processing_time")
         .description("request_latency")
