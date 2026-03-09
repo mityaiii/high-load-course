@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ConcurrentRateLimiter
@@ -74,9 +76,11 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
+        val idempotencyKey = UUID.randomUUID().toString()
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             .POST(HttpRequest.BodyPublishers.noBody())
+            .header("x-idempotency-key", idempotencyKey)
             .build()
 
         sendRequest(request, transactionId, paymentId, retryCount = 3, deadline = deadline)
@@ -120,26 +124,31 @@ class PaymentExternalSystemAdapterImpl(
 //                }
                 //   logger.info("lets send")
                 val result = try {
-                    coroutineScope {
-                        val firstJob = async {
-                            sendSingleRequest(request, transactionId, paymentId)
-                        }
+                    withTimeout(1500) {
+                        coroutineScope {
+                            val firstJob = async {
+                                sendSingleRequest(request, transactionId, paymentId)
+                            }
 
-                        val secondJob = async {
-                            delay(50)
-                            sendSingleRequest(request, transactionId, paymentId)
-                        }
-                        val thirdJob = async {
-                            delay(100)
-                            sendSingleRequest(request, transactionId, paymentId)
-                        }
+                            val secondJob = async {
+                                delay(50)
+                                sendSingleRequest(request, transactionId, paymentId)
+                            }
+                            val thirdJob = async {
+                                delay(100)
+                                sendSingleRequest(request, transactionId, paymentId)
+                            }
 
-                        select {
-                            firstJob.onAwait { it }
-                            secondJob.onAwait { it }
-                            thirdJob.onAwait { it }
+                            select {
+                                firstJob.onAwait { it }
+                                secondJob.onAwait { it }
+                                thirdJob.onAwait { it }
+                            }
                         }
                     }
+                } catch (e: TimeoutCancellationException) {
+                    logger.error("[$accountName] Request timed out after timeout for payment $paymentId")
+                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "timeout")
                 } finally {
                     ongoingWindow.releaseWindow()
                 }
