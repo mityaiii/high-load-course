@@ -114,7 +114,9 @@ class PaymentExternalSystemAdapterImpl(
 //                    return
 //                }
 
+                val start = now()
                 httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
+                    requestDuration.record((now() - start).toDouble())
                     val body = try {
                         mapper.readValue(response.body(), ExternalSysResponse::class.java)
                     } catch (e: Exception) {
