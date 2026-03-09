@@ -124,7 +124,7 @@ class PaymentExternalSystemAdapterImpl(
 //                }
                 //   logger.info("lets send")
                 val result = try {
-                    withTimeout(1500) {
+                    withTimeout(10000000) {
                         coroutineScope {
                             val firstJob = async {
                                 sendSingleRequest(request, transactionId, paymentId)
