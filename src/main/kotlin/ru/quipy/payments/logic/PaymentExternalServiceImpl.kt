@@ -131,18 +131,18 @@ class PaymentExternalSystemAdapterImpl(
                             }
 
                             val secondJob = async {
-                                delay(50)
-                                sendSingleRequest(request, transactionId, paymentId)
-                            }
-                            val thirdJob = async {
                                 delay(100)
                                 sendSingleRequest(request, transactionId, paymentId)
                             }
+//                            val thirdJob = async {
+//                                delay(100)
+//                                sendSingleRequest(request, transactionId, paymentId)
+//                            }
 
                             select {
                                 firstJob.onAwait { it }
                                 secondJob.onAwait { it }
-                                thirdJob.onAwait { it }
+                                //thirdJob.onAwait { it }
                             }
                         }
                     }
