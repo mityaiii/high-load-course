@@ -15,6 +15,7 @@ import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ConcurrentRateLimiter
 import ru.quipy.common.utils.NonBlockingOngoingWindow
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -59,7 +60,7 @@ class PaymentExternalSystemAdapterImpl(
         .publishPercentileHistogram()
         .register(meterRegistry)
 
-    private val rateLimiter = ConcurrentRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
+    private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = NonBlockingOngoingWindow(parallelRequests)
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -111,6 +112,10 @@ class PaymentExternalSystemAdapterImpl(
 
             try {
                 while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
+                    delay(10)
+                }
+
+                while (!rateLimiter.tick()) {
                     delay(10)
                 }
 
