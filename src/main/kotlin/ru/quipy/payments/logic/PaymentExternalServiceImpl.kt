@@ -64,11 +64,11 @@ class PaymentExternalSystemAdapterImpl(
         .register(meterRegistry)
 
     val circuitBreakerConfig = CircuitBreakerConfig.custom()
-        .failureRateThreshold(10F)
-        .slowCallRateThreshold(10F)
-        .waitDurationInOpenState(Duration.ofSeconds(15))
+        .failureRateThreshold(5F)
+        .slowCallRateThreshold(5F)
+        .waitDurationInOpenState(Duration.ofSeconds(10))
         .slowCallDurationThreshold(Duration.ofSeconds(1))
-        .permittedNumberOfCallsInHalfOpenState(30)
+        .permittedNumberOfCallsInHalfOpenState(40)
         .build()
 
     var circuitBreaker = CircuitBreaker.of("paymentService", circuitBreakerConfig)
