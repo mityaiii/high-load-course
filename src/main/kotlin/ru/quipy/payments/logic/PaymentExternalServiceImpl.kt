@@ -195,7 +195,7 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID
     ): ExternalSysResponse {
         return try {
-            withTimeout(2000) {
+            withTimeout(300) {
                 suspendCancellableCoroutine { continuation ->
                     val start = now()
 
