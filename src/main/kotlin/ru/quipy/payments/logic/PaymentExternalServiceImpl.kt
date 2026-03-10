@@ -194,42 +194,55 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         paymentId: UUID
     ): ExternalSysResponse {
-        return suspendCancellableCoroutine { continuation ->
-            val start = now()
+        return try {
+            withTimeout(2000) {
+                suspendCancellableCoroutine { continuation ->
+                    val start = now()
 
-            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply { response ->
-                    try {
-                        val duration = now() - start
-                        requestDuration.record(duration.toDouble())
-                        val body = try {
-                            mapper.readValue(response.body(), ExternalSysResponse::class.java)
-                        } catch (e: Exception) {
-                            //circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, e)
-                            logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
-                            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                        }
+                    httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                        .thenApply { response ->
+                            try {
+                                val duration = now() - start
+                                requestDuration.record(duration.toDouble())
+                                val body = try {
+                                    mapper.readValue(response.body(), ExternalSysResponse::class.java)
+                                } catch (e: Exception) {
+                                    //circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, e)
+                                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                                    ExternalSysResponse(
+                                        transactionId.toString(),
+                                        paymentId.toString(),
+                                        false,
+                                        e.message
+                                    )
+                                }
 
-                        if (body.result) {
-                            circuitBreaker.onSuccess(duration, TimeUnit.MILLISECONDS)
-                        } else {
-                            circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, Exception())
-                        }
+                                if (body.result) {
+                                    circuitBreaker.onSuccess(duration, TimeUnit.MILLISECONDS)
+                                } else {
+                                    circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, Exception())
+                                }
 
-                        if (continuation.isActive) {
-                            continuation.resume(body)
+                                if (continuation.isActive) {
+                                    continuation.resume(body)
+                                }
+                            } catch (e: Exception) {
+                                if (continuation.isActive) {
+                                    continuation.resumeWithException(e)
+                                }
+                            }
                         }
-                    } catch (e: Exception) {
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(e)
+                        .exceptionally { throwable ->
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(throwable)
+                            }
                         }
-                    }
                 }
-                .exceptionally { throwable ->
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(throwable)
-                    }
-                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger.error("[$accountName] Request timeout for $paymentId after 2 seconds")
+            circuitBreaker.onError(2000, TimeUnit.MILLISECONDS, e)
+            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "timeout")
         }
     }
 
