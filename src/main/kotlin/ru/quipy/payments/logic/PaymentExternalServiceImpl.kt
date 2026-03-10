@@ -100,7 +100,7 @@ class PaymentExternalSystemAdapterImpl(
             .header("x-idempotency-key", idempotencyKey)
             .build()
 
-        sendRequest(request, transactionId, paymentId, retryCount = 3, deadline = deadline)
+        sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
     }
 
     override fun price() = properties.price
@@ -127,15 +127,11 @@ class PaymentExternalSystemAdapterImpl(
             x++
 
             try {
-                while (!circuitBreaker.tryAcquirePermission()) {
-                    delay(10)
-                }
-
                 while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
                     delay(10)
                 }
 
-                while (!rateLimiter.tick()) {
+                while (!circuitBreaker.tryAcquirePermission() || !rateLimiter.tick()) {
                     delay(10)
                 }
 
