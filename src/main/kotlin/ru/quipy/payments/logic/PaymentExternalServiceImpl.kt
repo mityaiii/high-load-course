@@ -145,7 +145,6 @@ class PaymentExternalSystemAdapterImpl(
 //                }
                 //   logger.info("lets send")
                 val result = try {
-                    withTimeout(10000000) {
                         coroutineScope {
                             val firstJob = async {
                                 sendSingleRequest(request, transactionId, paymentId)
@@ -166,10 +165,6 @@ class PaymentExternalSystemAdapterImpl(
                                 //thirdJob.onAwait { it }
                             }
                         }
-                    }
-                } catch (e: TimeoutCancellationException) {
-                    logger.error("[$accountName] Request timed out after timeout for payment $paymentId")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "timeout")
                 } finally {
                     ongoingWindow.releaseWindow()
                 }
