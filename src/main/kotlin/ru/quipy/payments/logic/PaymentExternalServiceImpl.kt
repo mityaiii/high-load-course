@@ -2,6 +2,8 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.TimeoutCancellationException
@@ -15,6 +17,7 @@ import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ConcurrentRateLimiter
 import ru.quipy.common.utils.NonBlockingOngoingWindow
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -22,6 +25,7 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -59,7 +63,18 @@ class PaymentExternalSystemAdapterImpl(
         .publishPercentileHistogram()
         .register(meterRegistry)
 
-    private val rateLimiter = ConcurrentRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
+    val circuitBreakerConfig = CircuitBreakerConfig.custom()
+        .failureRateThreshold(8F)
+        .slowCallRateThreshold(8F)
+        .waitDurationInOpenState(Duration.ofSeconds(10))
+        .slowCallDurationThreshold(Duration.ofSeconds(1))
+        .permittedNumberOfCallsInHalfOpenState(40)
+        .build()
+
+    var circuitBreaker = CircuitBreaker.of("paymentService", circuitBreakerConfig)
+
+
+    private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec, Duration.ofSeconds(1))
     private val ongoingWindow = NonBlockingOngoingWindow(parallelRequests)
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -76,6 +91,8 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
+        //val temp = "http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"
+        //logger.info(temp)
         val idempotencyKey = UUID.randomUUID().toString()
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
@@ -83,7 +100,7 @@ class PaymentExternalSystemAdapterImpl(
             .header("x-idempotency-key", idempotencyKey)
             .build()
 
-        sendRequest(request, transactionId, paymentId, retryCount = 3, deadline = deadline)
+        sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
     }
 
     override fun price() = properties.price
@@ -114,6 +131,10 @@ class PaymentExternalSystemAdapterImpl(
                     delay(10)
                 }
 
+                while (!circuitBreaker.tryAcquirePermission() || !rateLimiter.tick()) {
+                    delay(10)
+                }
+
 //                if (!rateLimiter.tryTick(deadline)) {
 //                    with(Dispatchers.IO) {
 //                        paymentESService.update(paymentId) {
@@ -124,25 +145,25 @@ class PaymentExternalSystemAdapterImpl(
 //                }
                 //   logger.info("lets send")
                 val result = try {
-                    withTimeout(1500) {
+                    withTimeout(10000000) {
                         coroutineScope {
                             val firstJob = async {
                                 sendSingleRequest(request, transactionId, paymentId)
                             }
 
-                            val secondJob = async {
-                                delay(50)
-                                sendSingleRequest(request, transactionId, paymentId)
-                            }
-                            val thirdJob = async {
-                                delay(100)
-                                sendSingleRequest(request, transactionId, paymentId)
-                            }
+//                            val secondJob = async {
+//                                delay(100)
+//                                sendSingleRequest(request, transactionId, paymentId)
+//                            }
+//                            val thirdJob = async {
+//                                delay(100)
+//                                sendSingleRequest(request, transactionId, paymentId)
+//                            }
 
                             select {
                                 firstJob.onAwait { it }
-                                secondJob.onAwait { it }
-                                thirdJob.onAwait { it }
+                                //secondJob.onAwait { it }
+                                //thirdJob.onAwait { it }
                             }
                         }
                     }
@@ -169,35 +190,55 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         paymentId: UUID
     ): ExternalSysResponse {
-        return suspendCancellableCoroutine { continuation ->
-            val start = now()
+        return try {
+            withTimeout(300) {
+                suspendCancellableCoroutine { continuation ->
+                    val start = now()
 
-            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply { response ->
-                    try {
-                        val body = try {
-                            mapper.readValue(response.body(), ExternalSysResponse::class.java)
-                        } catch (e: Exception) {
-                            logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
-                            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                        }
+                    httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                        .thenApply { response ->
+                            try {
+                                val duration = now() - start
+                                requestDuration.record(duration.toDouble())
+                                val body = try {
+                                    mapper.readValue(response.body(), ExternalSysResponse::class.java)
+                                } catch (e: Exception) {
+                                    //circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, e)
+                                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                                    ExternalSysResponse(
+                                        transactionId.toString(),
+                                        paymentId.toString(),
+                                        false,
+                                        e.message
+                                    )
+                                }
 
-                        requestDuration.record((now() - start).toDouble())
+                                if (body.result) {
+                                    circuitBreaker.onSuccess(duration, TimeUnit.MILLISECONDS)
+                                } else {
+                                    circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, Exception())
+                                }
 
-                        if (continuation.isActive) {
-                            continuation.resume(body)
+                                if (continuation.isActive) {
+                                    continuation.resume(body)
+                                }
+                            } catch (e: Exception) {
+                                if (continuation.isActive) {
+                                    continuation.resumeWithException(e)
+                                }
+                            }
                         }
-                    } catch (e: Exception) {
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(e)
+                        .exceptionally { throwable ->
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(throwable)
+                            }
                         }
-                    }
                 }
-                .exceptionally { throwable ->
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(throwable)
-                    }
-                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger.error("[$accountName] Request timeout for $paymentId after 2 seconds")
+            circuitBreaker.onError(2000, TimeUnit.MILLISECONDS, e)
+            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "timeout")
         }
     }
 
