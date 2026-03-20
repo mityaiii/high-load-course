@@ -67,13 +67,6 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
-
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-//        paymentESService.update(paymentId) {
-//            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-//        }
-
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         val idempotencyKey = UUID.randomUUID().toString()
@@ -102,10 +95,6 @@ class PaymentExternalSystemAdapterImpl(
         var x = 0
         var shouldTry = true
         while (shouldTry) {
-//            if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
-////                logResult(paymentId, transactionId, "Deadline exceeded")
-//                return
-//            }
             shouldTry = false
             x++
 
@@ -113,16 +102,6 @@ class PaymentExternalSystemAdapterImpl(
                 while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
                     delay(10)
                 }
-
-//                if (!rateLimiter.tryTick(deadline)) {
-//                    with(Dispatchers.IO) {
-//                        paymentESService.update(paymentId) {
-//                            it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
-//                        }
-//                    }
-//                    return
-//                }
-                //   logger.info("lets send")
                 val result = try {
                     withTimeout(1500) {
                         coroutineScope {
@@ -159,7 +138,6 @@ class PaymentExternalSystemAdapterImpl(
                 }
             } catch (e: Exception) {
                 logger.error("[$accountName] Payment failed for $paymentId", e)
-//                logResult(paymentId, transactionId, e.message)
             }
         }
     }
@@ -200,18 +178,6 @@ class PaymentExternalSystemAdapterImpl(
                 }
         }
     }
-
-//    private fun logResult(paymentId: UUID, transactionId: UUID, message: String?) {
-//        try {
-//            with(Dispatchers.IO) {
-//                paymentESService.update(paymentId) {
-//                    it.logProcessing(false, now(), transactionId, reason = message)
-//                }
-//            }
-//        } catch(e: Exception) {
-//            logger.error("[$accountName] failed to save result for $paymentId", e)
-//        }
-//    }
 }
 
 public fun now() = System.currentTimeMillis()
