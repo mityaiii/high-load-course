@@ -131,11 +131,11 @@ class PaymentExternalSystemAdapterImpl(
                             }
 
                             val secondJob = async {
-                                delay(50)
+                                delay(30)
                                 sendSingleRequest(request, transactionId, paymentId)
                             }
                             val thirdJob = async {
-                                delay(100)
+                                delay(60)
                                 sendSingleRequest(request, transactionId, paymentId)
                             }
 
