@@ -4,7 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ConcurrentRateLimiter
@@ -16,6 +22,8 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 
 // Advice: always treat time as a Duration
@@ -47,7 +55,7 @@ class PaymentExternalSystemAdapterImpl(
 
     var requestDuration = DistributionSummary.builder("avg_payment_processing_time")
         .description("request_latency")
-        .publishPercentiles(0.5, 0.75, 0.9, 0.95, 0.99)
+        .publishPercentiles(0.5, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99)
         .publishPercentileHistogram()
         .register(meterRegistry)
 
@@ -59,18 +67,13 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
-
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-//        paymentESService.update(paymentId) {
-//            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-//        }
-
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
+        val idempotencyKey = UUID.randomUUID().toString()
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             .POST(HttpRequest.BodyPublishers.noBody())
+            .header("x-idempotency-key", idempotencyKey)
             .build()
 
         sendRequest(request, transactionId, paymentId, retryCount = 3, deadline = deadline)
@@ -91,12 +94,7 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         var x = 0
         var shouldTry = true
-
         while (shouldTry) {
-            if (now() + requestAverageProcessingTime.toMillis() >= deadline) {
-//                logResult(paymentId, transactionId, "Deadline exceeded")
-                return
-            }
             shouldTry = false
             x++
 
@@ -104,58 +102,82 @@ class PaymentExternalSystemAdapterImpl(
                 while (ongoingWindow.putIntoWindow() is NonBlockingOngoingWindow.WindowResponse.Fail) {
                     delay(10)
                 }
+                val result = try {
+                    withTimeout(1500) {
+                        coroutineScope {
+                            val firstJob = async {
+                                sendSingleRequest(request, transactionId, paymentId)
+                            }
 
-//                if (!rateLimiter.tryTick(deadline)) {
-//                    with(Dispatchers.IO) {
-//                        paymentESService.update(paymentId) {
-//                            it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded")
-//                        }
-//                    }
-//                    return
-//                }
+                            val secondJob = async {
+                                delay(30)
+                                sendSingleRequest(request, transactionId, paymentId)
+                            }
+                            val thirdJob = async {
+                                delay(60)
+                                sendSingleRequest(request, transactionId, paymentId)
+                            }
 
-                httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
-                    val body = try {
-                        mapper.readValue(response.body(), ExternalSysResponse::class.java)
-                    } catch (e: Exception) {
-                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
-                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                    } finally {
-                        ongoingWindow.releaseWindow()
+                            select {
+                                firstJob.onAwait { it }
+                                secondJob.onAwait { it }
+                                thirdJob.onAwait { it }
+                            }
+                        }
                     }
-
-                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-//                    with(Dispatchers.IO) {
-//                        paymentESService.update(paymentId) {
-//                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
-//                        }
-//                    }
-                    if (!body.result && x < retryCount) {
-                        shouldTry = true
-                    }
+                } catch (e: TimeoutCancellationException) {
+                    logger.error("[$accountName] Request timed out after timeout for payment $paymentId")
+                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "timeout")
+                } finally {
+                    ongoingWindow.releaseWindow()
                 }
-                if (shouldTry)
-                    delay(100 * x.toLong())
+
+                if (!result.result && x < retryCount) {
+                    shouldTry = true
+                    delay(10 * x.toLong())
+                }
             } catch (e: Exception) {
                 logger.error("[$accountName] Payment failed for $paymentId", e)
-//                logResult(paymentId, transactionId, e.message)
             }
         }
     }
 
-//    private fun logResult(paymentId: UUID, transactionId: UUID, message: String?) {
-//        try {
-//            with(Dispatchers.IO) {
-//                paymentESService.update(paymentId) {
-//                    it.logProcessing(false, now(), transactionId, reason = message)
-//                }
-//            }
-//        } catch(e: Exception) {
-//            logger.error("[$accountName] failed to save result for $paymentId", e)
-//        }
-//    }
+    private suspend fun sendSingleRequest(
+        request: HttpRequest,
+        transactionId: UUID,
+        paymentId: UUID
+    ): ExternalSysResponse {
+        return suspendCancellableCoroutine { continuation ->
+            val start = now()
+
+            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .thenApply { response ->
+                    try {
+                        val body = try {
+                            mapper.readValue(response.body(), ExternalSysResponse::class.java)
+                        } catch (e: Exception) {
+                            logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                        }
+
+                        requestDuration.record((now() - start).toDouble())
+
+                        if (continuation.isActive) {
+                            continuation.resume(body)
+                        }
+                    } catch (e: Exception) {
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(e)
+                        }
+                    }
+                }
+                .exceptionally { throwable ->
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(throwable)
+                    }
+                }
+        }
+    }
 }
 
 public fun now() = System.currentTimeMillis()
